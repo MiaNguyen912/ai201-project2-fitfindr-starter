@@ -373,6 +373,37 @@ For each tool, describe the specific failure mode you're handling and what the a
      sketch are all fine. You'll share this diagram with an AI tool when asking it to implement
      the planning loop and each individual tool. -->
 
+The Planning Loop drives the three tools in order. Each tool reads from and writes to the shared **Session state**; arrows are labeled with the call made or the state written. Any tool failure branches to the red **ERROR** node and returns early.
+
+```mermaid
+flowchart TD
+    User([User query]) --> Loop[Planning Loop]
+    Loop --> T1[search_listings<br/>description, size, max_price]:::tool
+    T1 -->|"results = [] → loosen & retry"| T1
+    T1 -->|"still empty"| Err[ERROR: set session.error<br/>return early]:::error
+    T1 -->|"selected_item = results[0]"| T5[check_price_fairness<br/>selected_item]:::tool
+    T5 -->|"price_check (tell user)"| T2[suggest_outfit<br/>selected_item, wardrobe]:::tool
+    T2 -->|"LLM failure"| Err
+    T2 -->|"outfit_suggestion = ..."| Keep{Keep item?}
+    Keep -->|"no → pick another"| T5
+    Keep -->|"yes"| T4[add_to_wardrobe<br/>selected_item, wardrobe]:::tool
+    T4 --> T3[create_fit_card<br/>outfit_suggestion, selected_item]:::tool
+    T3 -->|"empty outfit"| Err
+    T3 -->|"fit_card = ..."| Done([Return session])
+
+    T1 <-.-> State[(Session state)]:::state
+    T2 <-.-> State
+    T3 <-.-> State
+    T4 <-.-> State
+    T5 <-.-> State
+
+    classDef tool fill:#e6f4ea,stroke:#34a853,color:#000;
+    classDef state fill:#f1f3f4,stroke:#9aa0a6,color:#000;
+    classDef error fill:#fce8e6,stroke:#ea4335,color:#000;
+```
+
+**How to read it:** the User query enters the Planning Loop, which calls the tools in sequence. `search_listings` **self-loops** on empty results to retry with loosened filters; only if every fallback is still empty does it branch to **ERROR**. After a match, `check_price_fairness` notes whether the price is fair, then `suggest_outfit` runs. At **Keep item?** the user can pick another item (loop back), or keep it — which calls `add_to_wardrobe` then `create_fit_card`. Dashed arrows show every tool reading/writing the shared Session state; any failure (no listings, LLM error, empty outfit) sets `session.error` and returns early.
+
 ---
 
 ## AI Tool Plan
