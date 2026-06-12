@@ -421,7 +421,27 @@ flowchart TD
 
 **Milestone 3 — Individual tool implementations:**
 
+- **search_listings:** I'll give Claude the 'Tool 1' block from planning.md, plus its function prototype and description in `tools.py`, and ask it to implement the function using `load_listings()` from `utils/data_loader.py`. Before running it, I'll check that the generated code filters by all three parameters (`description`, `size`, `max_price`), scores by keyword overlap, drops zero-score listings, and returns an empty list (not an error) when nothing matches. I'll test it with 3 queries: one that matches, one with a size that doesn't exist, and one with a tiny `max_price` to make sure the empty case works. Note that the retry-with-fallback ladder lives in the planning loop, not in this function, the tool should just returns a plain list.
+
+- **suggest_outfit:** I'd build the LLM prompt and ask Claude to enhance it. Once i'm happy with the prompt, I'll give Claude the 'Tool 2' block from planning.md + the wardrobe schema + suggest_outfit prototype and description in `tools.py` + the LLM prompt i just buid, and ask it to build the function and call the Groq client that's already set up in `tools.py`. I'll verify it handles both cases:
+     - (1) a wardrobe with items (names specific pieces)
+     - (2) an empty wardrobe from `get_empty_wardrobe()` (falls back to general advice)
+The function should always returns a non-empty string in both cases
+
+- **create_fit_card:** I'd create the caption prompt and ask Claude to enhance it. Then, I'd give Claude the "Tool 3" block and ask it to implement the function using variances of the caption prompt I build (with higher temperature so it's different everytime). I'll check that it handles an empty `outfit` input case by returning an error string instead of raising exception, and that the caption mentions the item name, price, and platform. I'll test it with a normal outfit and with an empty string.
+
+- **add_to_wardrobe:** I'll give Claude the Tool 4 block and the wardrobe schema, and ask it to map a listing dict into the wardrobe item shape (`id`, `name`, `category`, `colors`, `style_tags`, optional `notes`) and append it to `wardrobe["items"]`. I'll verify it returns the updated wardrobe plus a confirmation, leaves the wardrobe unchanged if required fields like `name`/`category` are missing, and skips duplicates by `id`. I'll test it by adding one item, adding the same item again (duplicate), and passing an item with no `name`.
+
+- **check_price_fairness:** I'll give Claude the 'Tool 5' block and ask it to pull comparable listings from `load_listings()` (same category, overlapping style tags, similar condition), compute the median and min/max prices, and return the verdict dict. I'll check that it returns `"insufficient data"` when there are fewer than ~2 comparables instead of guessing, and that the verdict actually matches the numbers. I'll test it with an item that has lots of comparables and one that is unique.
+
+
+
 **Milestone 4 — Planning loop and state management:**
+
+- I'll give claude all necessary context like the the "Planning Loop" section (both the literal and the Technical Spec versions), the "State Management" table, and the "Architecture diagram" from planning.md, plus the `run_agent()` and `_new_session()` prototype in `agent.py`.
+- I'll ask it to turn the pseudocode into the real `run_agent()` loop, including building the session dict, calling the tools in the right order, and gating each step on whether a session field is set (so no step repeats and no tool runs before its input exists).
+- To verify, I'll run the full example query end-to-end and confirm I get a fit card, then run a query that matches nothing and confirm it stops early with a clean error message instead of crashing. I'll also track the session dict at each step to make sure data is being passed through state, not hard-coded between calls.
+
 
 ---
 
