@@ -461,20 +461,46 @@ The function should always returns a non-empty string in both cases
      -  if the outfit string is empty or missing `create_fit_card` returns a descriptive error string.
 - The interaction is complete when a fit card is produced, or when the session's `error` field is set on an early exit.
 
+
 ---
+
 
 Write out what a full user interaction looks like from start to finish — tool call by tool call. Use a specific example query.
 
 **Example user query:** "I'm looking for a vintage graphic tee under $30. I mostly wear baggy jeans and chunky sneakers. What's out there and how would I style it?"
 
-**Step 1:**
-<!-- What does the agent do first? Which tool is called? With what input? -->
+**Step 0 — Parse the query (before the loop):**
+The agent reads the message and pulls out the search params, writing them to the session:
+- `description = "vintage graphic tee"`, `size = None` (the user didn't give one), `max_price = 30.0`.
+It also loads the user's wardrobe into `session["wardrobe"]`. From the message ("baggy jeans and chunky sneakers"), the wardrobe already has items like "baggy dark-wash jeans" and "chunky white sneakers".
 
-**Step 2:**
-<!-- What happens next? What was returned from step 1? What tool is called now? -->
+**Step 1 — search_listings:**
+The loop sees `session["listings"]` is None, so it calls `search_listings("vintage graphic tee", size=None, max_price=30.0)`
+This returns a non-empty list, e.g. `[{"id": "L_012", "title": "Faded Nirvana band tee", "price": 22.0, "platform": "Depop", "size": "M", "condition": "good", ...}, {...}]`, sorted best-match first. The agent writes it to `session["listings"]`. 
 
-**Step 3:**
-<!-- Continue until the full interaction is complete -->
+**Step 2 — select an item:**
+`session["selected_item"] is None`, so the agent picks the top-ranked listing (or lets the user choose). then it sets `session["selected_item"] = listings[0]` (e.g. the $22 "Faded Nirvana band tee" from Depop)
+
+**Step 3 — check_price_fairness:**
+`session["price_check"] is None`, so the agent calls: `check_price_fairness(selected_item)` -> It pulls comparable vintage tees in good condition from the dataset, finds the median is ~$28, and returns `{"verdict": "good deal", "median_price": 28.0, "explanation": "At $22 this sits below the $28 median for vintage tees in good condition — a solid deal"}`. The agent tells the user this and writes it to `session["price_check"]`
+
+**Step 4 — suggest_outfit:**
+`session["outfit_suggestion"] is None`, so the agent calls `suggest_outfit(selected_item, wardrobe)`. Since the wardrobe has items, the LLM names specific pieces: e.g. "Pair the faded band tee with your baggy dark-wash jeans and chunky white sneakers for an easy 90s-grunge look — tuck the front hem for shape." This string goes into `session["outfit_suggestion"]`.
+
+**Step 5 — wardrobe follow-up (optional):**
+The agent asks "Anything else in your closet I should know about?" If the user adds something (say, a black denim jacket), it calls `add_to_wardrobe(described_item, wardrobe)`, clears `outfit_suggestion`, and loops back to Step 4 to re-suggest with the richer wardrobe. If the user has nothing to add, it marks the follow-up done and moves on.
+
+**Step 6 — keep decision + create_fit_card:**
+The agent asks if the user wants to keep the tee. The user says yes, so it:
+1. calls `add_to_wardrobe(selected_item, wardrobe)` to save the tee for future sessions, then
+2. calls `create_fit_card(outfit_suggestion, selected_item)`, which returns a caption like: "thrifted this faded band tee off depop for $22 and honestly it was made for my wide-legs 🖤 full look in my stories" -> This goes into `session["fit_card"]`, which is the terminal success value. (If the user had said no, the agent would offer to pick another listing from `session["listings"]` or start over.)
 
 **Final output to user:**
 <!-- What does the user actually see at the end? -->
+This is a back-and-forth conversation, not one big response. The agent surfaces each piece as it's produced and pauses for the user's input at the decision points. So across the session the user sees, in order:
+1. (after Steps 1–3) the matched listing plus the price note — "Found it: Faded Nirvana band tee, $22 on Depop (size M, good condition). Good deal — that's below the ~$28 median for vintage tees in good condition."
+2. (after Step 4) the styling suggestion — how to wear it with their baggy jeans and chunky sneakers — followed by the agent's question: "Anything else in your closet I should know about?"
+3. (after Step 5) if they added a piece, an updated styling suggestion; then the agent asks: "Want to keep this tee?"
+4. (after Step 6, user says yes) the final message: a confirmation that the tee was saved to their wardrobe, plus the shareable fit card caption
+
+That last message is the terminal output on the happy path. The early-exit path looks different: if nothing had matched at Step 1, even after all the retries, the conversation would have ended right there with a single clean message — "No vintage graphic tees in the dataset right now — try a different style or keyword" — and none of the later steps or questions would happen.
