@@ -13,6 +13,7 @@ Tools:
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -42,23 +43,16 @@ def search_listings(
     max_price: float | None = None,
 ) -> list[dict]:
     """
-    Search the mock listings dataset for items matching the description,
-    optional size, and optional price ceiling.
+    Search the mock listings dataset for items matching the description, optional size, and optional price ceiling.
 
     Args:
-        description: Keywords describing what the user is looking for
-                     (e.g., "vintage graphic tee").
-        size:        Size string to filter by, or None to skip size filtering.
-                     Matching is case-insensitive (e.g., "M" matches "S/M").
+        description: Keywords describing what the user is looking for (e.g., "vintage graphic tee").
+        size:        Size string to filter by, or None to skip size filtering. Matching is case-insensitive (e.g., "M" matches "S/M").
         max_price:   Maximum price (inclusive), or None to skip price filtering.
 
-    Returns:
-        A list of matching listing dicts, sorted by relevance (best match first).
-        Returns an empty list if nothing matches — does NOT raise an exception.
+    Returns: A list of matching listing dicts, sorted by relevance (best match first). Returns an empty list if nothing matches — does NOT raise an exception.
 
-    Each listing dict has the following fields:
-        id, title, description, category, style_tags (list), size,
-        condition, price (float), colors (list), brand, platform
+    Each listing dict has the following fields: id, title, description, category, style_tags (list), size, condition, price (float), colors (list), brand, platform
 
     TODO:
         1. Load all listings with load_listings().
@@ -69,8 +63,47 @@ def search_listings(
 
     Before writing code, fill in the Tool 1 section of planning.md.
     """
-    # Replace this with your implementation
-    return []
+    listings = load_listings()
+
+    # Tokenize the description into lowercase keywords (length >= 2) used for scoring.
+    keywords = [tok for tok in re.findall(r"[a-z0-9]+", description.lower()) if len(tok) >= 2]
+
+    size_filter = size.lower().strip() if size else None
+
+    results: list[tuple[int, dict]] = []
+    for listing in listings:
+        # Price filter (inclusive). Skip listings above the ceiling.
+        if max_price is not None and listing.get("price", 0) > max_price:
+            continue
+
+        # Size filter: case-insensitive and substring-aware, so "m" matches "s/m".
+        if size_filter is not None:
+            listing_size = str(listing.get("size", "")).lower()
+            if size_filter not in listing_size:
+                continue
+
+        # Score by keyword overlap against the listing's searchable text.
+        haystack = " ".join(
+            [
+                str(listing.get("title", "")),
+                str(listing.get("description", "")),
+                str(listing.get("category", "")),
+                " ".join(listing.get("style_tags", []) or []),
+                " ".join(listing.get("colors", []) or []),
+                str(listing.get("brand") or ""),
+            ]
+        ).lower()
+        score = sum(1 for kw in set(keywords) if kw in haystack)
+
+        # Drop listings with no keyword overlap.
+        if score == 0:
+            continue
+
+        results.append((score, listing))
+
+    # Sort by score, highest first. Stable sort preserves dataset order on ties.
+    results.sort(key=lambda pair: pair[0], reverse=True)
+    return [listing for _, listing in results]
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
