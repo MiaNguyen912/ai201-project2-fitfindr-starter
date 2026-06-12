@@ -114,27 +114,68 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     Args:
         new_item: A listing dict (the item the user is considering buying).
-        wardrobe: A wardrobe dict with an 'items' key containing a list of
-                  wardrobe item dicts. May be empty — handle this gracefully.
+        wardrobe: A wardrobe dict with an 'items' key containing a list of wardrobe item dicts. May be empty — handle this gracefully.
 
     Returns:
-        A non-empty string with outfit suggestions.
-        If the wardrobe is empty, offer general styling advice for the item
-        rather than raising an exception or returning an empty string.
+        A non-empty string with outfit suggestions.  If the wardrobe is empty, offer general styling advice for the item  rather than raising an exception or returning an empty string.
 
     TODO:
         1. Check whether wardrobe['items'] is empty.
-        2. If empty: call the LLM with a prompt for general styling ideas
-           (what kinds of items pair well, what vibe it suits, etc.).
-        3. If not empty: format the wardrobe items into a prompt and ask
-           the LLM to suggest specific outfit combinations using the new item
-           and named pieces from the wardrobe.
+        2. If empty: call the LLM with a prompt for general styling ideas (what kinds of items pair well, what vibe it suits, etc.).
+        3. If not empty: format the wardrobe items into a prompt and ask the LLM to suggest specific outfit combinations using the new item  and named pieces from the wardrobe.
         4. Return the LLM's response as a string.
 
     Before writing code, fill in the Tool 2 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    client = _get_groq_client()
+
+    item_desc = (
+        f"Title: {new_item.get('title', 'Unknown item')}\n"
+        f"Category: {new_item.get('category', 'unknown')}\n"
+        f"Colors: {', '.join(new_item.get('colors', []) or [])}\n"
+        f"Style tags: {', '.join(new_item.get('style_tags', []) or [])}\n"
+        f"Condition: {new_item.get('condition', 'unknown')}\n"
+        f"Brand: {new_item.get('brand') or 'no brand listed'}"
+    )
+
+    wardrobe_items = wardrobe.get("items", [])
+
+    if not wardrobe_items:
+        prompt = (
+            f"A user is considering buying this secondhand item:\n{item_desc}\n\n"
+            "They don't have a wardrobe on file yet. Give them 1-2 outfit ideas using this item, "
+            "describe what types of pieces pair well with it, what vibe or aesthetic it suits, "
+            "and any small styling tips (tucking, layering, etc.). "
+            "Be specific and casual, like a knowledgeable friend giving style advice. "
+            "Keep it under 150 words."
+        )
+    else:
+        wardrobe_text = "\n".join(
+            f"- {item['name']} ({item['category']}, "
+            f"colors: {', '.join(item.get('colors', []))})"
+            for item in wardrobe_items
+        )
+        prompt = (
+            f"A user is considering buying this secondhand item:\n{item_desc}\n\n"
+            f"Their current wardrobe:\n{wardrobe_text}\n\n"
+            "Suggest 1–2 complete outfits that pair the new item with specific named pieces "
+            "from their wardrobe (use the exact names listed above, e.g. 'your baggy straight-leg jeans'). "
+            "For each outfit note the vibe and one small styling tip (tuck, layer, cuff, etc.). "
+            "Be casual and conversational, like a style-savvy friend. "
+            "Keep it under 200 words."
+        )
+
+    response = client.chat.completions.create(
+        # model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant-128k",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=300,
+    )
+
+    result = response.choices[0].message.content.strip()
+    # Guard: if the LLM somehow returns empty content, surface a safe fallback
+    return result or "This piece is versatile — try pairing it with your go-to basics for an effortless everyday look."
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
