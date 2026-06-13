@@ -18,6 +18,7 @@ import re
 from dotenv import load_dotenv
 from groq import Groq
 
+from config import LLM_MODEL
 from utils.data_loader import load_listings
 
 load_dotenv()
@@ -166,8 +167,7 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
         )
 
     response = client.chat.completions.create(
-        # model="llama-3.3-70b-versatile",
-        model="llama-3.1-8b-instant-128k",
+        model=LLM_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
         max_tokens=300,
@@ -188,10 +188,7 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
         outfit:   The outfit suggestion string from suggest_outfit().
         new_item: The listing dict for the thrifted item.
 
-    Returns:
-        A 2–4 sentence string usable as an Instagram/TikTok caption.
-        If outfit is empty or missing, return a descriptive error message
-        string — do NOT raise an exception.
+    Returns: A 2–4 sentence string usable as an Instagram/TikTok caption. If outfit is empty or missing, return a descriptive error message string — do NOT raise an exception.
 
     The caption should:
     - Feel casual and authentic (like a real OOTD post, not a product description)
@@ -201,11 +198,57 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     TODO:
         1. Guard against an empty or whitespace-only outfit string.
-        2. Build a prompt that gives the LLM the item details and the outfit,
-           and asks for a caption matching the style guidelines above.
+        2. Build a prompt that gives the LLM the item details and the outfit, and asks for a caption matching the style guidelines above.
         3. Call the LLM and return the response.
 
     Before writing code, fill in the Tool 3 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    # To test this tool independently, run this cli:
+        # python -c "
+        # from tools import create_fit_card
+        # item = {
+        #     'title': 'Graphic Tee — 2003 Tour Bootleg Style',
+        #     'price': 22.0,
+        #     'platform': 'depop',
+        #     'category': 'tops',
+        #     'colors': ['black', 'white'],
+        #     'style_tags': ['vintage', 'graphic tee', 'streetwear'],
+        #     'condition': 'good',
+        #     'brand': None,
+        # }
+        # outfit = 'Pair this faded bootleg tee with your baggy dark-wash jeans and chunky white sneakers for a classic 90s streetwear look. Tuck the front hem slightly for shape and layer your vintage black denim jacket on top when it gets cold.'
+        # print(create_fit_card(outfit, item))
+        # "
+
+    if not outfit or not outfit.strip():
+        return "Error: outfit suggestion is missing — run suggest_outfit first before generating a fit card."
+
+    title = new_item.get("title", "this thrifted find")
+    price = new_item.get("price")
+    platform = new_item.get("platform", "a thrift platform")
+
+    price_str = f"${price:.0f}" if price is not None else "a steal"
+
+    prompt = (
+        f"Write a 2–4 sentence Instagram/TikTok OOTD caption for a thrifted item.\n\n"
+        f"Item: {title}\n"
+        f"Price: {price_str}\n"
+        f"Platform: {platform}\n"
+        f"Outfit: {outfit.strip()}\n\n"
+        "Rules:\n"
+        "- Sound casual and authentic, like a real person posting their outfit, NOT a product description\n"
+        "- Mention the item name, price, and platform each exactly once, woven in naturally\n"
+        "- Capture the specific vibe of the outfit (don't be generic)\n"
+        "- 2–4 sentences only; no hashtags, may add icons/emojis if it fits the vibe\n"
+    )
+
+    client = _get_groq_client()
+    response = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=1.1,
+        max_tokens=150,
+    )
+
+    result = response.choices[0].message.content.strip()
+    return result or f"thrifted {title} off {platform} for {price_str} and honestly it just works."
