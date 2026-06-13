@@ -252,3 +252,90 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     result = response.choices[0].message.content.strip()
     return result or f"thrifted {title} off {platform} for {price_str} and honestly it just works."
+
+
+# ── Tool 4: add_to_wardrobe ───────────────────────────────────────────────────
+
+def add_to_wardrobe(item: dict, wardrobe: dict) -> tuple[dict, str]:
+    """
+    Add an item to the user's wardrobe, mapping it into the wardrobe item shape.
+
+    The item can be either:
+      (1) a listing dict from search_listings (uses 'title' as the name), or
+      (2) a user-described item already in wardrobe shape (uses 'name' directly).
+
+    Args:
+        item: Dict to add. Required fields after mapping: 'name' and 'category'. Optional: 'id', 'colors', 'style_tags', 'notes'.
+        wardrobe: Current wardrobe dict with an 'items' key (list of wardrobe items).
+
+    Returns:
+        A tuple of (wardrobe_dict, message_str).
+        On success: updated wardrobe with the new item appended, and a confirmation string.
+        On failure: original wardrobe unchanged, and a descriptive error string. Never raises an exception.
+    """
+    # to test this tool independently, run this cli:
+        # python -c "
+        # from tools import add_to_wardrobe
+
+        # wardrobe = {'items': [
+        #     {'id': 'w_001', 'name': 'Baggy straight-leg jeans', 'category': 'bottoms', 'colors': ['dark blue'], 'style_tags': ['denim']}
+        # ]}
+
+        # # Case 1: add a listing dict (title -> name mapping)
+        # listing = {'id': 'lst_006', 'title': 'Graphic Tee — 2003 Tour Bootleg Style', 'category': 'tops', 'colors': ['black', 'white'], 'style_tags': ['vintage', 'streetwear'], 'price': 22.0, 'platform': 'depop'}
+        # w, msg = add_to_wardrobe(listing, wardrobe)
+        # print('Case 1 (listing dict):', msg)
+        # print('  wardrobe size:', len(w['items']), '| new item name:', w['items'][-1]['name'])
+
+        # # Case 2: duplicate id
+        # w2, msg2 = add_to_wardrobe(listing, w)
+        # print('Case 2 (duplicate):', msg2)
+        # print('  wardrobe size unchanged:', len(w2['items']))
+
+        # # Case 3: user-described item (name key, no id)
+        # described = {'name': 'Black combat boots', 'category': 'shoes', 'colors': ['black'], 'style_tags': ['grunge', 'boots'], 'notes': 'Lace-up, mid-ankle'}
+        # w3, msg3 = add_to_wardrobe(described, wardrobe)
+        # print('Case 3 (described item):', msg3)
+        # print('  auto id:', w3['items'][-1]['id'], '| notes:', w3['items'][-1].get('notes'))
+
+        # # Case 4: missing name/title
+        # w4, msg4 = add_to_wardrobe({'category': 'tops', 'colors': ['red']}, wardrobe)
+        # print('Case 4 (missing name):', msg4)
+
+        # # Case 5: missing category
+        # w5, msg5 = add_to_wardrobe({'name': 'Mystery item'}, wardrobe)
+        # print('Case 5 (missing category):', msg5)
+        # "
+
+    
+    # Resolve name: wardrobe-described items use 'name'; listing dicts use 'title'.
+    name = item.get("name") or item.get("title")
+    category = item.get("category")
+
+    if not name:
+        return wardrobe, "Error: item is missing a 'name' (or 'title') — wardrobe unchanged."
+    if not category:
+        return wardrobe, "Error: item is missing a 'category' — wardrobe unchanged."
+
+    items = wardrobe.get("items", [])
+
+    # Generate a stable id if the item doesn't have one.
+    item_id = item.get("id") or f"w_custom_{len(items) + 1:03d}"
+
+    # Duplicate check by id.
+    if any(w["id"] == item_id for w in items):
+        return wardrobe, f"'{name}' (id: {item_id}) is already in your wardrobe — skipping."
+
+    wardrobe_item = {
+        "id": item_id,
+        "name": name,
+        "category": category,
+        "colors": list(item.get("colors") or []),
+        "style_tags": list(item.get("style_tags") or []),
+    }
+    if item.get("notes"):
+        wardrobe_item["notes"] = item["notes"]
+
+    updated = {**wardrobe, "items": items + [wardrobe_item]}
+    return updated, f"Added '{name}' to your wardrobe."
+    
