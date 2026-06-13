@@ -87,12 +87,13 @@ However, if an LLM call fails, the agent should set the session `error` field wi
 
 **What it does:**
 <!-- Describe what this tool does in 1–2 sentences -->
-Takes the outfit suggestion from `suggest_outfit` plus the thrifted item and asks the LLM to write a short (2–4 sentence), shareable OOTD string caption using Instagram/TikTok style (e.g. "thrifted this faded band tee off depop for $22 and honestly it was made for my wide-legs 🖤 full look in my stories".)
+Takes the outfit suggestion from `suggest_outfit`, the thrifted item, and optionally the price verdict from `check_price_fairness`, and asks the LLM to write a short (2–4 sentence), shareable OOTD string caption using Instagram/TikTok style (e.g. "thrifted this faded band tee off depop for $22 and honestly it was made for my wide-legs 🖤 full look in my stories"). If a useful price verdict is available, the caption can naturally weave it in (e.g. referencing it as a good deal).
 
 The caption should:
 - Feel casual and authentic (like a real OOTD post, not a product description)
 - Mention the item name, price, and platform naturally (once each)
 - Capture the outfit vibe in specific terms
+- Optionally note the price verdict if it is "good deal" or "overpriced" (skip if "fair" or "insufficient data")
 - Sound different each time for different inputs (use higher LLM temperature)
 
 If outfit is empty or missing, it returns a descriptive error message string instead of raising an exception.
@@ -101,6 +102,7 @@ If outfit is empty or missing, it returns a descriptive error message string ins
 <!-- List each parameter, its type, and what it represents -->
 - `outfit` (str): the outfit suggestion string produced by `suggest_outfit`, describing how the item is styled. This is the basis for the caption's vibe.
 - `new_item` (dict): the listing dict for the selected thrifted item (chosen from the returned list of search_listings), in the same shape `search_listings` returns. This can be used to pull the item name (`title`), `price`, and `platform` into the caption.
+- `price_check` (dict | None, optional): the verdict dict returned by `check_price_fairness`. If available and the verdict is `"good deal"` or `"overpriced"`, the caption can weave in a brief pricing note. If `None` or `"insufficient data"` or `"fair"`, the caption skips the pricing reference.
 
 **What it returns:**
 <!-- Describe the return value -->
@@ -168,18 +170,15 @@ The agent first parses the user's natural-language query into `description`, `si
 
 1. **After the agent parsed the user query to get search params (`description`, `size`, and `max_price`) but doesn't haven't search for related listings**, it's gonna call `search_listings` with `description` + `size` + `max_price`.
    - If `search_listings` returns an empty list, the loop re-runs `search_listings` using the retry-with-fallback ladder (broaden to the closest sizes first → then relax price by ~20% → then loosen to keyword-only), while recording each adjustment in session state. Only if every fallback is still empty does it set `error` and stop before `suggest_outfit`.
-2. **When agent has the searched listings but no item selected yet** → narrow to one `new_item` by picking the top-ranked listing or ask the user to pick one from the returned list from `search_listings`. 
-3. **Once `new_item` has been selected**, either by user or by picking the top choice, call `check_price_fairness` on the selected item and let user know whether it's a good deal, fair, or overpriced. This is non-blocking, on `"insufficient data"` verdict from `check_price_fairness`, the loop just skips the price note and continues.
-4. **When the agent has a selected `new_item`, but no outfit advice has been suggested yet**, call `suggest_outfit` with the new_item and the user's wardrobe. If user has an empty wardrobe, the agent should still return general styling advice, so the loop continues rather than stopping.
-5. **Agent asks the user if they can tell more what they're having in their wardrobe to make better suggestion** When user answers, call `add_to_wardrobe` to persist the item they describe owning into their wardrobe for future styling sessions, then go back to step 4
-6. **Agent ask if the user wants to keep the item** if they agree**, call `add_to_wardrobe` to persist the thrifted find (or an item they describe owning) into their wardrobe for future styling sessions, then call `create_fit_card` with the outfit suggestion + the picked item. This is the terminal step on the happy path. If they don't want to keep the item, ask if they want to pick another item from the returned list of `search_listings` (go back to step 2), or if they want to start over (restart at step 1)
+2. **When agent has the searched listings but no item selected yet** → automatically pick the top-ranked listing and set it as `new_item`.
+3. **Once `new_item` has been selected**, call `check_price_fairness` on the selected item. This is non-blocking; on `"insufficient data"` verdict the loop just skips the price note and continues.
+4. **When the agent has a selected `new_item`, but no outfit advice has been suggested yet**, call `suggest_outfit` with the new_item and the user's wardrobe (loaded at startup). If user has an empty wardrobe, the agent should still return general styling advice, so the loop continues rather than stopping.
+5. **When the outfit suggestion is ready**, automatically call `create_fit_card` with the outfit suggestion + the picked item + the judgement returned from `check_price_fairness`. This is the terminal step on the happy path.
 
-
-**How it knows it's done:** the loop terminates in one of these condition:
+**How it knows it's done:** the loop terminates in one of these conditions:
 - (1) a fit card has been produced (success)
-- (2) the session's `error` field gets set on an early exit (e.g. no results after all retries, or an LLM failure in `suggest_outfit`/`create_fit_card`). 
-- (3) user don't want to keep the item they picked and want to start over.
-Each conditional above is gated on a piece of session state being present or absent, so the loop never repeats a completed step, except in the case where user don't want to keep the item they picked and want to pick another item from the returned list of `search_listings`, and never calls a downstream tool before its input exists.
+- (2) the session's `error` field gets set on an early exit (e.g. no results after all retries, or an LLM failure in `suggest_outfit`/`create_fit_card`).
+Each conditional above is gated on a piece of session state being present or absent, so the loop never repeats a completed step and never calls a downstream tool before its input exists.
 
 ---
 
@@ -188,7 +187,7 @@ Each conditional above is gated on a piece of session state being present or abs
 
 This is the precise, step-by-step version of the loop above, written so it can be implemented directly. The agent keeps a `session` dict and runs the loop until `session["done"]` is true.
 
-**Session fields used here:** `description`, `size`, `max_price`, `listings`, `adjustments`, `selected_item`, `price_check`, `wardrobe`, `wardrobe_followup_done`, `outfit_suggestion`, `fit_card`, `error`, `done`.
+**Session fields used here:** `description`, `size`, `max_price`, `listings`, `adjustments`, `selected_item`, `price_check`, `wardrobe`, `outfit_suggestion`, `fit_card`, `error`, `done`.
 
 ```
 # --- Setup (before the loop) ---
@@ -201,7 +200,6 @@ session = {
     "selected_item": None,
     "price_check": None, 
     "wardrobe": load_wardrobe(),  # {"items": [...]}, may be empty
-    "wardrobe_followup_done": False,  # have we already asked the user to describe more wardrobe items?
     "outfit_suggestion": None, 
     "fit_card": None, "error": None, "done": False,
 }
@@ -249,15 +247,13 @@ while not session["done"]:
 
     # STEP 2: select an item (only if listings exist but none chosen yet)
     if session["selected_item"] is None:
-        # default to top-ranked; or use the listing the user picked from session["listings"]
-        session["selected_item"] = user_pick or session["listings"][0]
+        # always pick the top-ranked listing automatically
+        session["selected_item"] = session["listings"][0]
         continue
 
     # STEP 3: price-fairness check (non-blocking; run once)
     if session["price_check"] is None:
         session["price_check"] = check_price_fairness(session["selected_item"])
-        if session["price_check"]["verdict"] != "insufficient data":
-            tell_user(session["price_check"]["explanation"])   # let user know: good deal / fair / overpriced
         # on "insufficient data" -> just skip the price note; do NOT stop.
         continue
 
@@ -271,53 +267,23 @@ while not session["done"]:
         session["outfit_suggestion"] = outfit_suggestion
         continue
 
-    # STEP 5: enrich the wardrobe for a better suggestion, then loop back to STEP 4.
-    # Runs at most once per selected_item: ask the user to describe more of their wardrobe.
-    if not session["wardrobe_followup_done"]:
-        described_items = ask_user_for_more_wardrobe_items()   # may be empty if user has nothing to add
-        if described_items:
-            for item in described_items:
-                session["wardrobe"] = add_to_wardrobe(item, session["wardrobe"])
-            session["wardrobe_followup_done"] = True
-            session["outfit_suggestion"] = None   # invalidate -> STEP 4 re-runs with the richer wardrobe
-        else:
-            session["wardrobe_followup_done"] = True   # user had nothing to add; move on
-        continue
-
-    # STEP 6: decide what to do with the item, then finish
+    # STEP 5: create fit card automatically and finish
     if session["fit_card"] is None:
-        if user_wants_to_keep_item:
-            session["wardrobe"] = add_to_wardrobe(session["selected_item"], session["wardrobe"])
-
-            card = create_fit_card(session["outfit_suggestion"], session["selected_item"])
-            if is_error_string(card):        # empty/invalid outfit guard
-                session["error"] = card
-            else:
-                session["fit_card"] = card   # terminal success
-            session["done"] = True
-            continue
+        card = create_fit_card(session["outfit_suggestion"], session["selected_item"], session["price_check"])
+        if is_error_string(card):        # empty/invalid outfit guard
+            session["error"] = card
         else:
-            if user_wants_another_item:
-                # reset downstream state and reuse cached listings (no new search) -> back to STEP 2
-                session["selected_item"] = None
-                session["price_check"] = None
-                session["outfit_suggestion"] = None
-                session["wardrobe_followup_done"] = False   # re-ask wardrobe follow-up for the new item
-                continue
-            else:                            # user wants to start over / quit
-                session["done"] = True
-                continue
+            session["fit_card"] = card   # terminal success
+        session["done"] = True
+        continue
 
 # --- Termination ---
 # done == True means exactly one of:
 #   session["fit_card"] is set   -> success, show the card (+ adjustments / price_check)
 #   session["error"] is set      -> show the error message
-#   neither                      -> user chose to start over / quit
 ```
 
-**Why each guard exists:** every `if session[X] is None` check makes the step idempotent — a completed step is skipped on the next iteration because its output field is now populated. There are two intentional "rewinds":
-- **Step 5 (wardrobe enrichment)** clears `outfit_suggestion` after adding described items, so Step 4 re-runs `suggest_outfit` with the richer wardrobe. The `wardrobe_followup_done` flag bounds this to one round per item, so it can't loop forever.
-- **Step 6's *pick-another-item* branch** clears `selected_item`, `price_check`, `outfit_suggestion`, and resets `wardrobe_followup_done` so Steps 2–5 re-run against the already-cached `session["listings"]` (no new search).
+**Why each guard exists:** every `if session[X] is None` check makes the step idempotent — a completed step is skipped on the next iteration because its output field is now populated. In single-turn mode the loop runs straight through Steps 1–5 without pausing for user input; each step fires exactly once and the session is returned when `done` is set.
 
 ---
 
@@ -335,16 +301,16 @@ Tools do **not** call each other directly. Instead the agent holds a single **se
 | `description`, `size`, `max_price` | query parsing (up front) | `search_listings` | the structured search params extracted from the user's message |
 | `adjustments` | `search_listings` retry ladder | user-facing summary | a record of any loosened constraints (e.g. "broadened size M → S/L", "raised price to $36") so the summary stays honest about what was actually searched |
 | `listings` | `search_listings` | item selection, `check_price_fairness` | the returned `list[dict]` of matches |
-| `new_item` | item selection (top match / user pick) | `suggest_outfit`, `create_fit_card`, `check_price_fairness`, `add_to_wardrobe` | the single chosen listing dict |
-| `price_check` | `check_price_fairness` | user-facing summary | the verdict dict (good deal / fair / overpriced / insufficient data) |
+| `new_item` | item selection (top match) | `suggest_outfit`, `create_fit_card`, `check_price_fairness` | the single chosen listing dict |
+| `price_check` | `check_price_fairness` | `create_fit_card`, user-facing summary | the verdict dict (good deal / fair / overpriced / insufficient data) |
 | `outfit` | `suggest_outfit` | `create_fit_card` | the outfit-suggestion string |
 | `fit_card` | `create_fit_card` | final output | the shareable caption string (terminal success value) |
-| `wardrobe` | loaded at start; updated by `add_to_wardrobe` | `suggest_outfit`, `add_to_wardrobe` | the user's closet dict (`{"items": [...]}`) |
+| `wardrobe` | loaded at start | `suggest_outfit` | the user's closet dict (`{"items": [...]}`) |
 | `error` | any tool on hard failure | planning loop / final output | a user-facing error message; when set, the loop stops early |
 
-**How it flows, concretely:** query parsing fills `description`/`size`/`max_price` → `search_listings` reads those and writes `listings` (plus `adjustments` if it had to retry) → the agent picks `new_item` from `listings` → `check_price_fairness` reads `new_item` and writes `price_check` → `suggest_outfit` reads `new_item` + `wardrobe` and writes `outfit` → `create_fit_card` reads `outfit` + `new_item` and writes `fit_card`. The key handoff is the **`new_item` dict**: because `search_listings` returns full listing dicts (with `title`, `price`, `platform`, etc.), the same object flows unchanged into every downstream tool, so no information is re-fetched or lost between steps.
+**How it flows, concretely:** query parsing fills `description`/`size`/`max_price` → `search_listings` reads those and writes `listings` (plus `adjustments` if it had to retry) → the agent picks `new_item` from `listings` → `check_price_fairness` reads `new_item` and writes `price_check` → `suggest_outfit` reads `new_item` + `wardrobe` and writes `outfit` → `create_fit_card` reads `outfit` + `new_item` + `price_check` and writes `fit_card`. The key handoff is the **`new_item` dict**: because `search_listings` returns full listing dicts (with `title`, `price`, `platform`, etc.), the same object flows unchanged into every downstream tool, so no information is re-fetched or lost between steps. `price_check` flows from `check_price_fairness` all the way to `create_fit_card` so the caption can optionally reflect the deal quality.
 
-Because `listings` stays in state, the agent can also support the "pick another item" path: if the user doesn't want to keep the current pick, it clears the downstream fields (`new_item`, `price_check`, `outfit`, `fit_card`) and re-selects a different `new_item` from the cached `listings` — no new search needed. Any tool that fails sets `error` instead of its normal output field, and the loop checks `error` before advancing.
+Any tool that fails sets `error` instead of its normal output field, and the loop checks `error` before advancing.
 
 ---
 
@@ -384,17 +350,13 @@ flowchart TD
     T1 -->|"selected_item = results[0]"| T5[check_price_fairness<br/>selected_item]:::tool
     T5 -->|"price_check (tell user)"| T2[suggest_outfit<br/>selected_item, wardrobe]:::tool
     T2 -->|"LLM failure"| Err
-    T2 -->|"outfit_suggestion = ..."| Keep{Keep item?}
-    Keep -->|"no → pick another"| T5
-    Keep -->|"yes"| T4[add_to_wardrobe<br/>selected_item, wardrobe]:::tool
-    T4 --> T3[create_fit_card<br/>outfit_suggestion, selected_item]:::tool
+    T2 -->|"outfit_suggestion = ..."| T3[create_fit_card<br/>outfit_suggestion, selected_item, price_check]:::tool
     T3 -->|"empty outfit"| Err
     T3 -->|"fit_card = ..."| Done([Return session])
 
     T1 <-.-> State[(Session state)]:::state
     T2 <-.-> State
     T3 <-.-> State
-    T4 <-.-> State
     T5 <-.-> State
 
     classDef tool fill:#e6f4ea,stroke:#34a853,color:#000;
@@ -402,7 +364,7 @@ flowchart TD
     classDef error fill:#fce8e6,stroke:#ea4335,color:#000;
 ```
 
-**How to read it:** the User query enters the Planning Loop, which calls the tools in sequence. `search_listings` **self-loops** on empty results to retry with loosened filters; only if every fallback is still empty does it branch to **ERROR**. After a match, `check_price_fairness` notes whether the price is fair, then `suggest_outfit` runs. At **Keep item?** the user can pick another item (loop back), or keep it — which calls `add_to_wardrobe` then `create_fit_card`. Dashed arrows show every tool reading/writing the shared Session state; any failure (no listings, LLM error, empty outfit) sets `session.error` and returns early.
+**How to read it:** the User query enters the Planning Loop, which calls the tools in sequence. `search_listings` **self-loops** on empty results to retry with loosened filters; only if every fallback is still empty does it branch to **ERROR**. After a match, `check_price_fairness` notes whether the price is fair, then `suggest_outfit` runs, and finally `create_fit_card` produces the caption — all automatically in a single pass. Dashed arrows show every tool reading/writing the shared Session state; any failure (no listings, LLM error, empty outfit) sets `session.error` and returns early.
 
 ---
 
@@ -479,7 +441,7 @@ The loop sees `session["listings"]` is None, so it calls `search_listings("vinta
 This returns a non-empty list, e.g. `[{"id": "L_012", "title": "Faded Nirvana band tee", "price": 22.0, "platform": "Depop", "size": "M", "condition": "good", ...}, {...}]`, sorted best-match first. The agent writes it to `session["listings"]`. 
 
 **Step 2 — select an item:**
-`session["selected_item"] is None`, so the agent picks the top-ranked listing (or lets the user choose). then it sets `session["selected_item"] = listings[0]` (e.g. the $22 "Faded Nirvana band tee" from Depop)
+`session["selected_item"] is None`, so the agent automatically picks the top-ranked listing and sets `session["selected_item"] = listings[0]` (e.g. the $22 "Faded Nirvana band tee" from Depop).
 
 **Step 3 — check_price_fairness:**
 `session["price_check"] is None`, so the agent calls: `check_price_fairness(selected_item)` -> It pulls comparable vintage tees in good condition from the dataset, finds the median is ~$28, and returns `{"verdict": "good deal", "median_price": 28.0, "explanation": "At $22 this sits below the $28 median for vintage tees in good condition — a solid deal"}`. The agent tells the user this and writes it to `session["price_check"]`
@@ -487,20 +449,14 @@ This returns a non-empty list, e.g. `[{"id": "L_012", "title": "Faded Nirvana ba
 **Step 4 — suggest_outfit:**
 `session["outfit_suggestion"] is None`, so the agent calls `suggest_outfit(selected_item, wardrobe)`. Since the wardrobe has items, the LLM names specific pieces: e.g. "Pair the faded band tee with your baggy dark-wash jeans and chunky white sneakers for an easy 90s-grunge look — tuck the front hem for shape." This string goes into `session["outfit_suggestion"]`.
 
-**Step 5 — wardrobe follow-up (optional):**
-The agent asks "Anything else in your closet I should know about?" If the user adds something (say, a black denim jacket), it calls `add_to_wardrobe(described_item, wardrobe)`, clears `outfit_suggestion`, and loops back to Step 4 to re-suggest with the richer wardrobe. If the user has nothing to add, it marks the follow-up done and moves on.
-
-**Step 6 — keep decision + create_fit_card:**
-The agent asks if the user wants to keep the tee. The user says yes, so it:
-1. calls `add_to_wardrobe(selected_item, wardrobe)` to save the tee for future sessions, then
-2. calls `create_fit_card(outfit_suggestion, selected_item)`, which returns a caption like: "thrifted this faded band tee off depop for $22 and honestly it was made for my wide-legs 🖤 full look in my stories" -> This goes into `session["fit_card"]`, which is the terminal success value. (If the user had said no, the agent would offer to pick another listing from `session["listings"]` or start over.)
+**Step 5 — create_fit_card:**
+The agent automatically calls `create_fit_card(outfit_suggestion, selected_item, price_check)`. Because the price check returned `"good deal"`, the LLM has context to weave that into the caption naturally. This returns something like: "thrifted this faded band tee off depop for $22 — honestly a steal — and it was made for my wide-legs 🖤 full look in my stories". This goes into `session["fit_card"]`, which is the terminal success value.
 
 **Final output to user:**
 <!-- What does the user actually see at the end? -->
-This is a back-and-forth conversation, not one big response. The agent surfaces each piece as it's produced and pauses for the user's input at the decision points. So across the session the user sees, in order:
-1. (after Steps 1–3) the matched listing plus the price note — "Found it: Faded Nirvana band tee, $22 on Depop (size M, good condition). Good deal — that's below the ~$28 median for vintage tees in good condition."
-2. (after Step 4) the styling suggestion — how to wear it with their baggy jeans and chunky sneakers — followed by the agent's question: "Anything else in your closet I should know about?"
-3. (after Step 5) if they added a piece, an updated styling suggestion; then the agent asks: "Want to keep this tee?"
-4. (after Step 6, user says yes) the final message: a confirmation that the tee was saved to their wardrobe, plus the shareable fit card caption
+The agent runs all steps in a single pass and returns the results all at once across three panels:
+1. **Top listing found** — the matched item with price, platform, size, condition, and the price-fairness note (e.g. "Faded Nirvana band tee — $22 on Depop (size M, good condition). Good deal — below the ~$28 median for vintage tees.").
+2. **Outfit idea** — the styling suggestion using the wardrobe loaded at startup (e.g. "Pair the faded band tee with your baggy dark-wash jeans and chunky white sneakers for an easy 90s-grunge look — tuck the front hem for shape.").
+3. **Fit card** — the shareable caption, optionally reflecting the price verdict (e.g. "thrifted this faded band tee off depop for $22 — honestly a steal — and it was made for my wide-legs 🖤 full look in my stories").
 
-That last message is the terminal output on the happy path. The early-exit path looks different: if nothing had matched at Step 1, even after all the retries, the conversation would have ended right there with a single clean message — "No vintage graphic tees in the dataset right now — try a different style or keyword" — and none of the later steps or questions would happen.
+On the early-exit path, if nothing matched at Step 1 even after all retries, only the first panel is populated with a clean error message — "No vintage graphic tees in the dataset right now — try a different style or keyword" — and the other two panels are empty.
