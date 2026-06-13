@@ -18,7 +18,7 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
-from tools import search_listings, suggest_outfit, create_fit_card
+from tools import search_listings, suggest_outfit, create_fit_card, add_to_wardrobe, check_price_fairness
 
 
 # ── session state ─────────────────────────────────────────────────────────────

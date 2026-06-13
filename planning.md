@@ -164,7 +164,7 @@ If too few comparables are found (e.g. fewer than 2), it cannot reliably judge f
 **How does your agent decide which tool to call next?**
 <!-- Describe the logic your planning loop uses. What does it look at? What conditions change its behavior? How does it know when it's done? -->
 
-The planning loop is **state-driven**: after each tool call it inspects the session state (what's already filled in, whether `error` is set) and picks the next tool. The three required tools (`search_listings → suggest_outfit → create_fit_card`) form a fixed backbone; the two additional tools (`check_price_fairness`, `add_to_wardrobe`) are optional branches the loop takes when their precondition is met. At any point, if a tool sets the session `error` field (a hard failure), the loop stops and surfaces that message instead of continuing.
+The planning loop is **state-driven**: after each tool call it inspects the session state (what's already filled in, whether `error` is set) and picks the next tool. The five steps — `search_listings → check_price_fairness → suggest_outfit → create_fit_card` — form a fixed backbone. At any point, if a step sets the session `error` field (a hard failure), the loop stops and surfaces that message instead of continuing.
 
 The agent first parses the user's natural-language query into `description`, `size`, and `max_price` (this happens up front, before the loop's tool steps). The decision order for each iteration is:
 
@@ -185,75 +185,74 @@ Each conditional above is gated on a piece of session state being present or abs
 ## Planning Loop — Technical Spec (implementation-level)
 (prompt used to generate this section: for the planning loop, i want it to be more technically specific, for example: "After search_listings runs, check if results is empty. If yes, set an error message in the session and return early. If no, set selected_item = results[0] and proceed to suggest_outfit." Your description should be specific enough that someone else could implement it from your words alone. Please do not touch the existing planning loop content, but make a second Planning loop section under the existing one and write your updated plan there)
 
-This is the precise, step-by-step version of the loop above, written so it can be implemented directly. The agent keeps a `session` dict and runs the loop until `session["done"]` is true.
+This is the precise, step-by-step version of the loop above, written so it can be implemented directly. The agent keeps a `session` dict and a local `done` flag that controls the loop.
 
-**Session fields used here:** `description`, `size`, `max_price`, `listings`, `adjustments`, `selected_item`, `price_check`, `wardrobe`, `outfit_suggestion`, `fit_card`, `error`, `done`.
+**Session fields used here:** `query`, `parsed`, `search_results`, `selected_item`, `price_evaluation`, `wardrobe`, `outfit_suggestion`, `fit_card`, `error`.
 
 ```
 # --- Setup (before the loop) ---
 session = {
-    "description": None, 
-    "size": None, 
-    "max_price": None,
-    "listings": None, 
-    "adjustments": [], 
+    "query": user_message,
+    "parsed": {},                # filled by parse_query below
+    "search_results": [],        # [] = no search run yet
     "selected_item": None,
-    "price_check": None, 
     "wardrobe": load_wardrobe(),  # {"items": [...]}, may be empty
-    "outfit_suggestion": None, 
-    "fit_card": None, "error": None, "done": False,
+    "outfit_suggestion": None,
+    "price_evaluation": {},      # {} = price check not run yet
+    "fit_card": None,
+    "error": None,
 }
 
+
 # Parse the raw user query into search params. Fill description; size/max_price may be None.
-session["description"], session["size"], session["max_price"] = parse_query(user_message)
-if not session["description"]:
-    session["description"] = user_message   # fallback: use raw text, no structured filters
+parsed = parse_query(user_message)
+session["parsed"] = {
+    "description": parsed["description"] or user_message,   # fallback: use raw text
+    "size": parsed["size"],
+    "max_price": parsed["max_price"],
+}
 
 # --- Loop ---
-while not session["done"]:
+done = False
+while not done:
 
-    # STEP 1: search (only if we have params but no listings yet)
-    if session["listings"] is None:
-        results = search_listings(session["description"], session["size"], session["max_price"])
+    # STEP 1: search (only if no results yet)
+    if not session["search_results"]:
+        desc = session["parsed"]["description"]
+        size = session["parsed"]["size"]
+        max_price = session["parsed"]["max_price"]
+        results = search_listings(desc, size, max_price)
 
         # Retry-with-fallback ladder: stop at the first non-empty result.
-        if not results:
-            # 1a. broaden to the closest smaller + closest larger sizes
-            for s in closest_sizes(session["size"]):
-                results = search_listings(session["description"], s, session["max_price"])
-                if results:
-                    session["adjustments"].append(f"No size {session['size']}, broadened to {s}")
-                    break
-        if not results and session["max_price"] is not None:
+        if not results and size:
+            # 1a. drop size filter
+            results = search_listings(desc, None, max_price)
+        if not results and max_price is not None:
             # 1b. relax price by +20%
-            loosened = round(session["max_price"] * 1.20, 2)
-            results = search_listings(session["description"], session["size"], loosened)
-            if results:
-                session["adjustments"].append(f"Nothing under ${session['max_price']}, widened to ${loosened}")
+            loosened = round(max_price * 1.20, 2)
+            results = search_listings(desc, size, loosened)
         if not results:
             # 1c. keyword-only, no filters
-            results = search_listings(session["description"], None, None)
-            if results:
-                session["adjustments"].append("Dropped all filters; searched by keywords only")
+            results = search_listings(desc, None, None)
 
         # If every fallback is still empty -> hard stop.
         if not results:
             session["error"] = "No listings matched — try a different style or keyword."
-            session["done"] = True
+            done = True
             continue
 
-        session["listings"] = results
-        continue   # re-enter loop; listings now set
+        session["search_results"] = results
+        continue   # re-enter loop; search_results now set
 
-    # STEP 2: select an item (only if listings exist but none chosen yet)
+    # STEP 2: select an item (only if search_results exist but none chosen yet)
     if session["selected_item"] is None:
         # always pick the top-ranked listing automatically
-        session["selected_item"] = session["listings"][0]
+        session["selected_item"] = session["search_results"][0]
         continue
 
     # STEP 3: price-fairness check (non-blocking; run once)
-    if session["price_check"] is None:
-        session["price_check"] = check_price_fairness(session["selected_item"])
+    if not session["price_evaluation"]:
+        session["price_evaluation"] = check_price_fairness(session["selected_item"])
         # on "insufficient data" -> just skip the price note; do NOT stop.
         continue
 
@@ -262,28 +261,28 @@ while not session["done"]:
         outfit_suggestion = suggest_outfit(session["selected_item"], session["wardrobe"])
         if not outfit_suggestion:                       # LLM failure
             session["error"] = "Styling unavailable right now — please try again."
-            session["done"] = True
+            done = True
             continue
         session["outfit_suggestion"] = outfit_suggestion
         continue
 
     # STEP 5: create fit card automatically and finish
     if session["fit_card"] is None:
-        card = create_fit_card(session["outfit_suggestion"], session["selected_item"], session["price_check"])
+        card = create_fit_card(session["outfit_suggestion"], session["selected_item"], session["price_evaluation"])
         if is_error_string(card):        # empty/invalid outfit guard
             session["error"] = card
         else:
             session["fit_card"] = card   # terminal success
-        session["done"] = True
+        done = True
         continue
 
 # --- Termination ---
 # done == True means exactly one of:
-#   session["fit_card"] is set   -> success, show the card (+ adjustments / price_check)
+#   session["fit_card"] is set   -> success, show the card (+ price_evaluation)
 #   session["error"] is set      -> show the error message
 ```
 
-**Why each guard exists:** every `if session[X] is None` check makes the step idempotent — a completed step is skipped on the next iteration because its output field is now populated. In single-turn mode the loop runs straight through Steps 1–5 without pausing for user input; each step fires exactly once and the session is returned when `done` is set.
+**Why each guard exists:** every `if not session[X]` / `if session[X] is None` check makes the step idempotent — a completed step is skipped on the next iteration because its output field is now populated. In single-turn mode the loop runs straight through Steps 1–5 without pausing for user input; each step fires exactly once and the session is returned when the terminal step completes.
 
 ---
 
@@ -298,19 +297,19 @@ Tools do **not** call each other directly. Instead the agent holds a single **se
 
 | Field | Written by | Read by | Holds |
 |-------|-----------|---------|-------|
-| `description`, `size`, `max_price` | query parsing (up front) | `search_listings` | the structured search params extracted from the user's message |
-| `adjustments` | `search_listings` retry ladder | user-facing summary | a record of any loosened constraints (e.g. "broadened size M → S/L", "raised price to $36") so the summary stays honest about what was actually searched |
-| `listings` | `search_listings` | item selection, `check_price_fairness` | the returned `list[dict]` of matches |
-| `new_item` | item selection (top match) | `suggest_outfit`, `create_fit_card`, `check_price_fairness` | the single chosen listing dict |
-| `price_check` | `check_price_fairness` | `create_fit_card`, user-facing summary | the verdict dict (good deal / fair / overpriced / insufficient data) |
-| `outfit` | `suggest_outfit` | `create_fit_card` | the outfit-suggestion string |
+| `query` | set at start | — | the original user query string |
+| `parsed` | query parsing (up front) | `search_listings` | dict of extracted search params: `description`, `size`, `max_price` |
+| `search_results` | `search_listings` | item selection, `check_price_fairness` | the returned `list[dict]` of matches |
+| `selected_item` | item selection (top match) | `suggest_outfit`, `create_fit_card`, `check_price_fairness` | the single chosen listing dict |
+| `price_evaluation` | `check_price_fairness` | `create_fit_card`, user-facing summary | the verdict dict (good deal / fair / overpriced / insufficient data) |
+| `outfit_suggestion` | `suggest_outfit` | `create_fit_card` | the outfit-suggestion string |
 | `fit_card` | `create_fit_card` | final output | the shareable caption string (terminal success value) |
 | `wardrobe` | loaded at start | `suggest_outfit` | the user's closet dict (`{"items": [...]}`) |
-| `error` | any tool on hard failure | planning loop / final output | a user-facing error message; when set, the loop stops early |
+| `error` | any step on hard failure | planning loop / final output | a user-facing error message; when set, the loop stops early |
 
-**How it flows, concretely:** query parsing fills `description`/`size`/`max_price` → `search_listings` reads those and writes `listings` (plus `adjustments` if it had to retry) → the agent picks `new_item` from `listings` → `check_price_fairness` reads `new_item` and writes `price_check` → `suggest_outfit` reads `new_item` + `wardrobe` and writes `outfit` → `create_fit_card` reads `outfit` + `new_item` + `price_check` and writes `fit_card`. The key handoff is the **`new_item` dict**: because `search_listings` returns full listing dicts (with `title`, `price`, `platform`, etc.), the same object flows unchanged into every downstream tool, so no information is re-fetched or lost between steps. `price_check` flows from `check_price_fairness` all the way to `create_fit_card` so the caption can optionally reflect the deal quality.
+**How it flows, concretely:** query parsing fills `parsed` (`description`/`size`/`max_price`) → `search_listings` reads `parsed` and writes `search_results` → the agent picks `selected_item` from `search_results` → `check_price_fairness` reads `selected_item` and writes `price_evaluation` → `suggest_outfit` reads `selected_item` + `wardrobe` and writes `outfit_suggestion` → `create_fit_card` reads `outfit_suggestion` + `selected_item` + `price_evaluation` and writes `fit_card`. The key handoff is the **`selected_item` dict**: because `search_listings` returns full listing dicts (with `title`, `price`, `platform`, etc.), the same object flows unchanged into every downstream step. `price_evaluation` flows all the way to `create_fit_card` so the caption can optionally reflect the deal quality.
 
-Any tool that fails sets `error` instead of its normal output field, and the loop checks `error` before advancing.
+Any step that fails sets `error` instead of its normal output field, and the loop stops early.
 
 ---
 
@@ -320,7 +319,7 @@ For each tool, describe the specific failure mode you're handling and what the a
 
 | Tool | Failure mode | Agent response |
 |------|-------------|----------------|
-| search_listings | No results match the query | Run the retry-with-fallback ladder: broaden to the closest sizes → relax `max_price` by ~20% → keyword-only with no filters, recording each loosened constraint in `session["adjustments"]`. The first non-empty result wins and the chain continues. Only if every fallback is still empty does the agent set `session["error"]` to a "no results — try a different style/keyword" message and stop before `suggest_outfit`. |
+| search_listings | No results match the query | Run the retry-with-fallback ladder: drop size → relax `max_price` by ~20% → keyword-only with no filters. The first non-empty result wins and the chain continues. Only if every fallback is still empty does the agent set `session["error"]` to a "no results — try a different style/keyword" message and stop before `suggest_outfit`. |
 | suggest_outfit | Wardrobe is empty | Do not error or stop. The tool falls back to general styling advice for the item on its own and still returns a non-empty string, so the loop continues to `create_fit_card`. (Separately, if the underlying LLM call itself fails, set `session["error"]` to a "styling unavailable" message instead of passing an empty string downstream.) |
 | create_fit_card | Outfit input is missing or incomplete (empty `outfit_suggestion` or missing item fields) | Guard before calling the LLM. Instead of raising, return a descriptive error string; the agent detects it (`is_error_string`) and sets `session["error"]` so the user sees a clear message rather than a broken/empty caption. |
 | check_price_fairness | Too few comparable listings to judge fairly (fewer than ~2) | Return a `verdict` of `"insufficient data"` with an explanation rather than guessing or raising. The loop treats this as non-blocking: it simply skips the price note and continues to `suggest_outfit`. (If the item is missing a `price`, return a descriptive error string.) |
@@ -348,7 +347,7 @@ flowchart TD
     T1 -->|"results = [] → loosen & retry"| T1
     T1 -->|"still empty"| Err[ERROR: set session.error<br/>return early]:::error
     T1 -->|"selected_item = results[0]"| T5[check_price_fairness<br/>selected_item]:::tool
-    T5 -->|"price_check (tell user)"| T2[suggest_outfit<br/>selected_item, wardrobe]:::tool
+    T5 -->|"price_evaluation → session"| T2[suggest_outfit<br/>selected_item, wardrobe]:::tool
     T2 -->|"LLM failure"| Err
     T2 -->|"outfit_suggestion = ..."| T3[create_fit_card<br/>outfit_suggestion, selected_item, price_check]:::tool
     T3 -->|"empty outfit"| Err
@@ -444,7 +443,7 @@ This returns a non-empty list, e.g. `[{"id": "L_012", "title": "Faded Nirvana ba
 `session["selected_item"] is None`, so the agent automatically picks the top-ranked listing and sets `session["selected_item"] = listings[0]` (e.g. the $22 "Faded Nirvana band tee" from Depop).
 
 **Step 3 — check_price_fairness:**
-`session["price_check"] is None`, so the agent calls: `check_price_fairness(selected_item)` -> It pulls comparable vintage tees in good condition from the dataset, finds the median is ~$28, and returns `{"verdict": "good deal", "median_price": 28.0, "explanation": "At $22 this sits below the $28 median for vintage tees in good condition — a solid deal"}`. The agent tells the user this and writes it to `session["price_check"]`
+`session["price_evaluation"]` is empty, so the agent calls `check_price_fairness(selected_item)`. It pulls comparable vintage tees in good condition from the dataset, finds the median is ~$28, and returns `{"verdict": "good deal", "median_price": 28.0, "explanation": "At $22 this sits below the $28 median for vintage tees in good condition — a solid deal"}`. This dict is written to `session["price_evaluation"]` and later passed to `create_fit_card`.
 
 **Step 4 — suggest_outfit:**
 `session["outfit_suggestion"] is None`, so the agent calls `suggest_outfit(selected_item, wardrobe)`. Since the wardrobe has items, the LLM names specific pieces: e.g. "Pair the faded band tee with your baggy dark-wash jeans and chunky white sneakers for an easy 90s-grunge look — tuck the front hem for shape." This string goes into `session["outfit_suggestion"]`.
