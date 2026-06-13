@@ -198,7 +198,7 @@ session = {
     "selected_item": None,
     "wardrobe": load_wardrobe(),  # {"items": [...]}, may be empty
     "outfit_suggestion": None,
-    "price_evaluation": {},      # {} = price check not run yet
+    "price_evaluation": {},      # dict returned by check_price_fairness; {} means price check not run yet
     "fit_card": None,
     "error": None,
 }

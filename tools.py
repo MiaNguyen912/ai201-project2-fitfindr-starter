@@ -36,6 +36,52 @@ def _get_groq_client():
     return Groq(api_key=api_key)
 
 
+# ── stop words ───────────────────────────────────────────────────────────────
+
+_STOP_WORDS = {
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "up", "about", "into", "through", "is",
+    "it", "its", "be", "as", "are", "was", "were", "been", "have", "has",
+    "do", "did", "will", "would", "could", "should", "may", "might",
+    "i", "me", "my", "we", "you", "he", "she", "they", "them", "their",
+    "this", "that", "these", "those", "am", "no", "not", "so", "if",
+    "looking", "want", "need", "find", "get",
+}
+
+
+# ── size matching ─────────────────────────────────────────────────────────────
+
+def _size_matches(query_size: str, listing_size: str) -> bool:
+    """
+    Return True if query_size is compatible with listing_size.
+
+    Handles:
+    - Parenthetical notes  "XL (fits oversized)" → strips to "XL"
+    - One-size aliases     "one size" ↔ "OS" ↔ "One Size (adjustable)"
+    - Waist/length         "W30 L30" matches "W30/L30", "W30 L32", etc.
+    - Slash sizes          query "M/L" matches listings "M", "L", or "M/L"
+    - Letter sizes         simple substring after normalization
+    """
+    q = query_size.lower().strip()
+    l = listing_size.lower().strip()
+    # Strip parenthetical notes from the listing size before comparing
+    l_clean = re.sub(r'\s*\([^)]*\)', '', l).strip()
+
+    # One Size / OS equivalence
+    if re.fullmatch(r'one\s*size', q) or q == 'os':
+        return bool(re.search(r'one\s*size|\bos\b', l_clean))
+
+    # Waist/length: match on waist number only (inseam may vary)
+    wq = re.match(r'w(\d+)', q)
+    if wq:
+        wl = re.search(r'w(\d+)', l_clean)
+        return bool(wl and wq.group(1) == wl.group(1))
+
+    # Slash / multi-size: any component appearing in the listing is a match
+    parts = [p.strip() for p in q.split('/')]
+    return any(p in l_clean for p in parts)
+
+
 # ── Tool 1: search_listings ───────────────────────────────────────────────────
 
 def search_listings(
@@ -66,34 +112,41 @@ def search_listings(
     """
     listings = load_listings()
 
-    # Tokenize the description into lowercase keywords (length >= 2) used for scoring.
-    keywords = [tok for tok in re.findall(r"[a-z0-9]+", description.lower()) if len(tok) >= 2]
+    # Tokenize the description into lowercase keywords, dropping stop words.
+    keywords = [
+        tok for tok in re.findall(r"[a-z0-9]+", description.lower())
+        if len(tok) >= 2 and tok not in _STOP_WORDS
+    ]
+    # print(f"DEBUG: tokenized description into keywords: {keywords}")
 
     size_filter = size.lower().strip() if size else None
+    # print(f"DEBUG: search_listings with description='{description}', size='{size_filter}', max_price={max_price}, keywords={keywords}")
 
     results: list[tuple[int, dict]] = []
     for listing in listings:
         # Price filter (inclusive). Skip listings above the ceiling.
         if max_price is not None and listing.get("price", 0) > max_price:
+            # print(f"DEBUG: filtering out price {listing.get('price')} > max_price {max_price}")
             continue
 
-        # Size filter: case-insensitive and substring-aware, so "m" matches "s/m".
+        # Size filter: use _size_matches to handle slash sizes, W/L, one-size, etc.
         if size_filter is not None:
-            listing_size = str(listing.get("size", "")).lower()
-            if size_filter not in listing_size:
+            if not _size_matches(size_filter, str(listing.get("size", ""))):
                 continue
+        # print("DEBUG: pass size filter")
 
         # Score by keyword overlap against the listing's searchable text.
         haystack = " ".join(
             [
-                str(listing.get("title", "")),
+                # str(listing.get("title", "")),
                 str(listing.get("description", "")),
-                str(listing.get("category", "")),
-                " ".join(listing.get("style_tags", []) or []),
-                " ".join(listing.get("colors", []) or []),
-                str(listing.get("brand") or ""),
+                # str(listing.get("category", "")),
+                # " ".join(listing.get("style_tags", []) or []),
+                # " ".join(listing.get("colors", []) or []),
+                # str(listing.get("brand") or ""),
             ]
         ).lower()
+        # print(f"DEBUG: haystack for listing '{listing.get('title', '')}': {haystack}")
         score = sum(1 for kw in set(keywords) if kw in haystack)
 
         # Drop listings with no keyword overlap.
@@ -180,13 +233,14 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
 
-def create_fit_card(outfit: str, new_item: dict) -> str:
+def create_fit_card(outfit: str, new_item: dict, price_evaluation: dict | None = None) -> str:
     """
     Generate a short, shareable outfit caption for the thrifted find.
 
     Args:
-        outfit:   The outfit suggestion string from suggest_outfit().
-        new_item: The listing dict for the thrifted item.
+        outfit:           The outfit suggestion string from suggest_outfit().
+        new_item:         The listing dict for the thrifted item.
+        price_evaluation: Optional verdict dict from check_price_fairness. verdict is one of: "good deal", "fair", "overpriced", "insufficient data". the caption weaves in a pricing note.
 
     Returns: A 2–4 sentence string usable as an Instagram/TikTok caption. If outfit is empty or missing, return a descriptive error message string — do NOT raise an exception.
 
@@ -229,15 +283,29 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     price_str = f"${price:.0f}" if price is not None else "a steal"
 
+    price_note = ""
+    if isinstance(price_evaluation, dict):
+        verdict = price_evaluation.get("verdict", "")
+        if verdict == "good deal":
+            price_note = "Price context: This item is a good deal vs. similar listings — naturally mention it was a find/steal if it fits the vibe.\n"
+        elif verdict == "overpriced":
+            price_note = "Price context: This item is overpriced vs. similar listings — you can acknowledge the splurge if it fits the vibe.\n"
+        elif verdict == "fair":
+            price_note = "Price context: This item is fairly priced vs. similar listings — no need to comment on the price in the caption.\n"
+        elif verdict == "insufficient data":
+            price_note = "Price context: Not enough data to judge price fairness — skip mentioning the price in the caption.\n"
+
     prompt = (
         f"Write a 2–4 sentence Instagram/TikTok OOTD caption for a thrifted item.\n\n"
         f"Item: {title}\n"
         f"Price: {price_str}\n"
         f"Platform: {platform}\n"
-        f"Outfit: {outfit.strip()}\n\n"
+        f"Outfit: {outfit.strip()}\n"
+        f"price note: {price_note}\n"
         "Rules:\n"
         "- Sound casual and authentic, like a real person posting their outfit, NOT a product description\n"
         "- Mention the item name, price, and platform each exactly once, woven in naturally\n"
+        "- if the price note is 'good deal', explicitly mention it's 'a steal', if it's 'overpriced', explicitly say 'it's a bit pricy but worth it'. If it's 'fair' or 'insufficient data', skip mentioning the price.\n"
         "- Capture the specific vibe of the outfit (don't be generic)\n"
         "- 2–4 sentences only; no hashtags, may add icons/emojis if it fits the vibe\n"
     )

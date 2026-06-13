@@ -214,3 +214,53 @@ def test_price_zero_formatted_correctly():
     with patch("tools._get_groq_client", return_value=mock_client):
         create_fit_card(SAMPLE_OUTFIT, item)
     assert "$0" in _captured_prompt(mock_client)
+
+
+# ── price_evaluation parameter ────────────────────────────────────────────────
+
+def test_good_deal_verdict_injects_price_note():
+    mock_client = _make_mock_client("A caption.")
+    price_eval = {"verdict": "good deal", "item_price": 22.0}
+    with patch("tools._get_groq_client", return_value=mock_client):
+        create_fit_card(SAMPLE_OUTFIT, SAMPLE_ITEM, price_eval)
+    assert "good deal" in _captured_prompt(mock_client)
+
+
+def test_overpriced_verdict_injects_price_note():
+    mock_client = _make_mock_client("A caption.")
+    price_eval = {"verdict": "overpriced", "item_price": 22.0}
+    with patch("tools._get_groq_client", return_value=mock_client):
+        create_fit_card(SAMPLE_OUTFIT, SAMPLE_ITEM, price_eval)
+    assert "overpriced" in _captured_prompt(mock_client)
+
+
+def test_fair_verdict_does_not_inject_price_note():
+    mock_client = _make_mock_client("A caption.")
+    price_eval = {"verdict": "fair", "item_price": 22.0}
+    with patch("tools._get_groq_client", return_value=mock_client):
+        create_fit_card(SAMPLE_OUTFIT, SAMPLE_ITEM, price_eval)
+    prompt = _captured_prompt(mock_client)
+    assert "good deal" not in prompt and "overpriced" not in prompt
+
+
+def test_none_price_evaluation_does_not_inject_price_note():
+    mock_client = _make_mock_client("A caption.")
+    with patch("tools._get_groq_client", return_value=mock_client):
+        create_fit_card(SAMPLE_OUTFIT, SAMPLE_ITEM, None)
+    prompt = _captured_prompt(mock_client)
+    assert "good deal" not in prompt and "overpriced" not in prompt
+
+
+def test_empty_price_evaluation_does_not_inject_price_note():
+    mock_client = _make_mock_client("A caption.")
+    with patch("tools._get_groq_client", return_value=mock_client):
+        create_fit_card(SAMPLE_OUTFIT, SAMPLE_ITEM, {})
+    prompt = _captured_prompt(mock_client)
+    assert "good deal" not in prompt and "overpriced" not in prompt
+
+
+def test_price_evaluation_does_not_affect_return_type():
+    price_eval = {"verdict": "good deal"}
+    with patch("tools._get_groq_client", return_value=_make_mock_client("A caption.")):
+        result = create_fit_card(SAMPLE_OUTFIT, SAMPLE_ITEM, price_eval)
+    assert isinstance(result, str) and result

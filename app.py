@@ -43,8 +43,50 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
            string and return it along with session["outfit_suggestion"] and
            session["fit_card"].
     """
-    # TODO: implement this function
-    return "Agent not yet implemented.", "", ""
+    # Step 1: guard against empty query
+    if not user_query or not user_query.strip():
+        return "Please enter a search query.", "", ""
+
+    # Step 2: select wardrobe
+    wardrobe = (
+        get_example_wardrobe()
+        if wardrobe_choice == "Example wardrobe"
+        else get_empty_wardrobe()
+    )
+
+    # Step 3: run the agent
+    session = run_agent(user_query.strip(), wardrobe)
+
+    # Step 4: surface errors in the first panel
+    if session["error"]:
+        return session["error"], "", ""
+
+    # Step 5: format the selected listing into a readable string
+    item = session["selected_item"]
+    price = item.get("price")
+    price_str = f"${price:.2f}" if price is not None else "Price not listed"
+
+    price_eval = session.get("price_evaluation") or {}
+    verdict = price_eval.get("verdict", "")
+    verdict_line = f"Price verdict: {verdict}\n" if verdict else ""
+
+    colors = ", ".join(item.get("colors") or []) or "—"
+    tags = ", ".join(item.get("style_tags") or []) or "—"
+    adjustment_note = f"(Note: {session.get("adjustment_note")})\n" if session.get("adjustment_note") else ""
+
+    listing_text = (
+        f"{item.get('title', 'Unknown item')}\n"
+        f"{adjustment_note}"
+        f"Price:     {price_str}\n"
+        f"Platform:  {item.get('platform', '—')}\n"
+        f"Condition: {item.get('condition', '—')}\n"
+        f"Size:      {item.get('size', '—')}\n"
+        f"Colors:    {colors}\n"
+        f"Tags:      {tags}\n"
+        f"{verdict_line}"
+    )
+
+    return listing_text, session["outfit_suggestion"], session["fit_card"]
 
 
 # ── interface ─────────────────────────────────────────────────────────────────
