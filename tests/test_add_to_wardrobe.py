@@ -4,8 +4,6 @@ Tests for add_to_wardrobe.
 No LLM calls — this tool is pure data manipulation, so no mocking needed.
 """
 
-import pytest
-
 from tools import add_to_wardrobe
 
 

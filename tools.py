@@ -338,4 +338,144 @@ def add_to_wardrobe(item: dict, wardrobe: dict) -> tuple[dict, str]:
 
     updated = {**wardrobe, "items": items + [wardrobe_item]}
     return updated, f"Added '{name}' to your wardrobe."
+
+
+# ── Tool 5: check_price_fairness ─────────────────────────────────────────────
+
+# Condition tiers used for proximity scoring (adjacent tiers are still comparable).
+_CONDITION_RANK = {"excellent": 2, "good": 1, "fair": 0}
+def check_price_fairness(item: dict, max_comparables: int = 10,) -> dict | str:
+    """
+    Estimate whether an item's price is fair relative to comparable listings.
+
+    Comparables are found via search_listings using the item's style_tags + 
+    category as keywords, then filtered to the same category and a similar
+    condition (same or one tier away on excellent > good > fair). The item
+    itself is excluded by id.
+
+    Args:
+        item: Listing dict to evaluate. Uses category, style_tags, condition, price, and id for comparison.
+        max_comparables: Cap on how many comparables to use (default 10).
+
+    Returns:
+        A dict with keys: verdict, item_price, comparable_count, median_price, price_range, explanation.  
+        verdict is one of: "good deal", "fair", "overpriced", "insufficient data".
+        Returns a plain error string (not a dict) if item is missing a price. Never raises.
+    """
+    # to test this tool independently, run this cli:
+        # python -c "
+        # from tools import check_price_fairness
+
+        # # Case 1: well-priced vintage tee (expect 'fair' or 'good deal')
+        # item1 = {'id': 'lst_006', 'title': 'Graphic Tee', 'category': 'tops', 'style_tags': ['vintage', 'graphic tee', 'streetwear'], 'condition': 'good', 'price': 22.0, 'platform': 'depop'}
+        # r1 = check_price_fairness(item1)
+        # print('Case 1 (vintage tee \$22):')
+        # print('  verdict:', r1['verdict'])
+        # print('  median:', r1['median_price'], '| comparables:', r1['comparable_count'])
+        # print('  range:', r1['price_range'])
+        # print('  explanation:', r1['explanation'])
+
+        # # Case 2: expensive item (expect 'overpriced')
+        # item2 = {**item1, 'id': 'x', 'price': 120.0}
+        # r2 = check_price_fairness(item2)
+        # print('\nCase 2 (same tee at \$120):')
+        # print('  verdict:', r2['verdict'])
+
+        # # Case 3: very cheap item (expect 'good deal')
+        # item3 = {**item1, 'id': 'y', 'price': 5.0}
+        # r3 = check_price_fairness(item3)
+        # print('\nCase 3 (same tee at \$5):')
+        # print('  verdict:', r3['verdict'])
+
+        # # Case 4: missing price
+        # item4 = {'id': 'z', 'category': 'tops', 'style_tags': ['vintage'], 'condition': 'good'}
+        # print('\nCase 4 (missing price):', check_price_fairness(item4))
+
+        # # Case 5: unique item with few comparables (expect 'insufficient data')
+        # item5 = {'id': 'a', 'title': 'Rare pin', 'category': 'Rare accessories', 'style_tags': ['one of a kind'], 'condition': 'excellent', 'price': 50.0}
+        # r5 = check_price_fairness(item5)
+        # print('\nCase 5 (rare item):')
+        # print('  verdict:', r5['verdict'], '| comparables:', r5['comparable_count'])
+        # "
+
+    import statistics
     
+
+    price = item.get("price")
+    if price is None:
+        return "Error: item is missing a 'price' field — cannot judge price fairness."
+
+    title = item.get("title", "This item")
+    category = (item.get("category") or "").lower()
+    style_tags = item.get("style_tags") or []
+    condition = (item.get("condition") or "").lower()
+    item_id = item.get("id")
+
+    # Build a keyword description from style_tags + category for search_listings.
+    description = " ".join([title] + style_tags + ([category] if category else []))
+    if not description.strip():
+        description = category or "item"
+
+    # Use search_listings to surface keyword-relevant candidates, then filter.
+    candidates = search_listings(description, size=None, max_price=None)
+
+    item_condition_rank = _CONDITION_RANK.get(condition, 1)
+
+    comparables = []
+    for c in candidates:
+        if c.get("id") == item_id:
+            continue
+        if (c.get("category") or "").lower() != category:
+            continue
+        comp_rank = _CONDITION_RANK.get((c.get("condition") or "").lower(), 1)
+        if abs(comp_rank - item_condition_rank) > 1:
+            continue
+        if c.get("price") is None:
+            continue
+        comparables.append(c)
+        if len(comparables) >= max_comparables:
+            break
+
+    # print([c["title"] for c in comparables])  # debug: print comparable ids
+    # print(f"Found {len(comparables)} comparables")  # debug
+    comparable_count = len(comparables)
+
+    if comparable_count < 2:
+        return {
+            "verdict": "insufficient data",
+            "item_price": price,
+            "comparable_count": comparable_count,
+            "median_price": None,
+            "price_range": None,
+            "explanation": f"Only {comparable_count} comparable listing(s) found - not enough data to judge price fairness.",
+        }
+
+    comp_prices = [c["price"] for c in comparables]
+    median_price = statistics.median(comp_prices)
+    price_range = (min(comp_prices), max(comp_prices))
+
+    ratio = price / median_price
+    if ratio <= 0.85:
+        verdict = "good deal"
+    elif ratio <= 1.15:
+        verdict = "fair"
+    else:
+        verdict = "overpriced"
+
+    explanation = (
+        f"At ${price:.0f} this is "
+        f"{'below' if ratio < 1 else 'above'} the ${median_price:.0f} median "
+        f"for {(condition + ' ') if condition else ''}{category}s "
+        f"(range: ${price_range[0]:.0f}–${price_range[1]:.0f} across "
+        f"{comparable_count} comparable{'s' if comparable_count != 1 else ''}) "
+        f"— {verdict}."
+    )
+
+    return {
+        "verdict": verdict,
+        "item_price": price,
+        "comparable_count": comparable_count,
+        "median_price": median_price,
+        "price_range": price_range,
+        "explanation": explanation,
+    }
