@@ -115,6 +115,7 @@ def _parse_query(query: str) -> dict:
     }
 
 
+
 # ── session state ─────────────────────────────────────────────────────────────
 
 def _new_session(query: str, wardrobe: dict) -> dict:
@@ -260,6 +261,7 @@ def run_agent(query: str, wardrobe: dict) -> dict:
             done = True
             continue
 
+    print(f"DEBUG: final session state: {session}")
     return session
 
 
