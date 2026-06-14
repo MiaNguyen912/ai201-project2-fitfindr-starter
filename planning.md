@@ -120,7 +120,7 @@ The tool does not raise exeption. It guards against an empty or whitespace-only 
 #### Tool 4: add_to_wardrobe
 
 **What it does:**
-Add an item into the user user's wardrobe database by adding an item into the `items` list of the "empty_wardrobe" dict in data/waredrobe_schema.js. An item added to waredrobe can be:
+Add an item into the user's wardrobe by appending it to the `items` list of the wardrobe dict. Called automatically at the end of the planning loop **only when the user selects "Your custom wardrobe"** in the UI — the selected listing is mapped into wardrobe shape and written back to `session["wardrobe"]` so it accumulates across queries within the same session. An item added to wardrobe can be:
 - (1) the new thrifted item user chose. In this case, use the schema that `suggest_outfit` expects, so a thrifted find the user decides to "keep" becomes part of their closet for future styling sessions.
 - (2) an item user describes they already has in their wardrobe
 
@@ -173,7 +173,8 @@ The agent first parses the user's natural-language query into `description`, `si
 2. **When agent has the searched listings but no item selected yet** → automatically pick the top-ranked listing and set it as `new_item`.
 3. **Once `new_item` has been selected**, call `check_price_fairness` on the selected item. This is non-blocking; on `"insufficient data"` verdict the loop just skips the price note and continues.
 4. **When the agent has a selected `new_item`, but no outfit advice has been suggested yet**, call `suggest_outfit` with the new_item and the user's wardrobe (loaded at startup). If user has an empty wardrobe, the agent should still return general styling advice, so the loop continues rather than stopping.
-5. **When the outfit suggestion is ready**, automatically call `create_fit_card` with the outfit suggestion + the picked item + the judgement returned from `check_price_fairness`. This is the terminal step on the happy path.
+5. **When the outfit suggestion is ready and `save_to_wardrobe` is `True`** (user selected "Your custom wardrobe"), call `add_to_wardrobe` with `selected_item` and `session["wardrobe"]`. Write the updated wardrobe back to `session["wardrobe"]`. Skip this step entirely if `save_to_wardrobe` is `False`.
+6. **When the outfit suggestion is ready**, automatically call `create_fit_card` with the outfit suggestion + the picked item + the judgement returned from `check_price_fairness`. This is the terminal step on the happy path.
 
 **How it knows it's done:** the loop terminates in one of these conditions:
 - (1) a fit card has been produced (success)
@@ -304,7 +305,7 @@ Tools do **not** call each other directly. Instead the agent holds a single **se
 | `price_evaluation` | `check_price_fairness` | `create_fit_card`, user-facing summary | the verdict dict (good deal / fair / overpriced / insufficient data) |
 | `outfit_suggestion` | `suggest_outfit` | `create_fit_card` | the outfit-suggestion string |
 | `fit_card` | `create_fit_card` | final output | the shareable caption string (terminal success value) |
-| `wardrobe` | loaded at start | `suggest_outfit` | the user's closet dict (`{"items": [...]}`) |
+| `wardrobe` | loaded at start; updated by `add_to_wardrobe` when `save_to_wardrobe=True` | `suggest_outfit` | the user's closet dict (`{"items": [...]}`); grows within a session when "Your custom wardrobe" is selected |
 | `error` | any step on hard failure | planning loop / final output | a user-facing error message; when set, the loop stops early |
 
 **How it flows, concretely:** query parsing fills `parsed` (`description`/`size`/`max_price`) → `search_listings` reads `parsed` and writes `search_results` → the agent picks `selected_item` from `search_results` → `check_price_fairness` reads `selected_item` and writes `price_evaluation` → `suggest_outfit` reads `selected_item` + `wardrobe` and writes `outfit_suggestion` → `create_fit_card` reads `outfit_suggestion` + `selected_item` + `price_evaluation` and writes `fit_card`. The key handoff is the **`selected_item` dict**: because `search_listings` returns full listing dicts (with `title`, `price`, `platform`, etc.), the same object flows unchanged into every downstream step. `price_evaluation` flows all the way to `create_fit_card` so the caption can optionally reflect the deal quality.

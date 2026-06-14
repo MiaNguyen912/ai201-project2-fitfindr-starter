@@ -143,7 +143,7 @@ def _new_session(query: str, wardrobe: dict) -> dict:
 
 # ── planning loop ─────────────────────────────────────────────────────────────
 
-def run_agent(query: str, wardrobe: dict) -> dict:
+def run_agent(query: str, wardrobe: dict, save_to_wardrobe: bool = False) -> dict:
     """
     Main agent entry point. Runs the FitFindr planning loop for a single user interaction and returns the completed session dict.
 
@@ -232,12 +232,12 @@ def run_agent(query: str, wardrobe: dict) -> dict:
             session["selected_item"] = session["search_results"][0]
             continue
 
-        # Step 3b: price check (non-blocking — runs after item is selected)
+        # Step 5: price check (non-blocking — runs after item is selected)
         if not session["price_evaluation"]:
             session["price_evaluation"] = check_price_fairness(session["selected_item"])
             continue
 
-        # Step 5: outfit suggestion
+        # Step 6: outfit suggestion
         if session["outfit_suggestion"] is None:
             outfit = suggest_outfit(session["selected_item"], session["wardrobe"])
             if not outfit:
@@ -247,7 +247,12 @@ def run_agent(query: str, wardrobe: dict) -> dict:
             session["outfit_suggestion"] = outfit
             continue
 
-        # Step 6: create fit card (terminal step)
+        # add to custom wardrobe (only when user opted in)
+        if save_to_wardrobe:
+            updated_wardrobe, _ = add_to_wardrobe(session["selected_item"], session["wardrobe"], persist=True)
+            session["wardrobe"] = updated_wardrobe            
+            
+        # Step 7: create fit card (terminal step)
         if session["fit_card"] is None:
             card = create_fit_card(
                 session["outfit_suggestion"],

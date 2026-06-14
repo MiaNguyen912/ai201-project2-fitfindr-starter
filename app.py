@@ -15,7 +15,7 @@ but check your terminal — the port may differ).
 import gradio as gr
 
 from agent import run_agent
-from utils.data_loader import get_example_wardrobe, get_empty_wardrobe
+from utils.data_loader import get_custom_wardrobe, get_example_wardrobe, get_empty_wardrobe
 
 
 # ── query handler ─────────────────────────────────────────────────────────────
@@ -48,14 +48,18 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
         return "Please enter a search query.", "", ""
 
     # Step 2: select wardrobe
-    wardrobe = (
-        get_example_wardrobe()
-        if wardrobe_choice == "Example wardrobe"
-        else get_empty_wardrobe()
-    )
+    if wardrobe_choice == "Example wardrobe":
+        wardrobe = get_example_wardrobe()
+        save_to_wardrobe = False
+    elif wardrobe_choice == "Your custom wardrobe":
+        wardrobe = get_custom_wardrobe()
+        save_to_wardrobe = True
+    else:
+        wardrobe = get_empty_wardrobe()
+        save_to_wardrobe = False
 
     # Step 3: run the agent
-    session = run_agent(user_query.strip(), wardrobe)
+    session = run_agent(user_query.strip(), wardrobe, save_to_wardrobe=save_to_wardrobe)
 
     # Step 4: surface errors in the first panel
     if session["error"]:
@@ -115,7 +119,7 @@ Describe what you're looking for — include size and price if you want to filte
                 scale=3,
             )
             wardrobe_choice = gr.Radio(
-                choices=["Example wardrobe", "Empty wardrobe (new user)"],
+                choices=["Example wardrobe", "Empty wardrobe (new user)", "Your custom wardrobe"],
                 value="Example wardrobe",
                 label="Wardrobe",
                 scale=1,

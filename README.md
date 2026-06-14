@@ -138,11 +138,13 @@ The loop is **state-driven**: after each tool call it inspects the session dict 
 
 ```
 parse query → [while not done]:
-  1. search_results empty?  → call search_listings (with retry ladder)
-  2. selected_item is None? → pick search_results[0]
-  3. price_evaluation empty?→ call check_price_fairness (non-blocking)
-  4. outfit_suggestion None?→ call suggest_outfit
-  5. fit_card is None?      → call create_fit_card → done = True
+  1. search_results empty?    → call search_listings (with retry ladder)
+  2. selected_item is None?   → pick search_results[0]
+  3. price_evaluation empty?  → call check_price_fairness (non-blocking)
+  4. outfit_suggestion None?  → call suggest_outfit
+  4b. save_to_wardrobe=True?  → call add_to_wardrobe(selected_item, wardrobe)
+                                 write result back to session["wardrobe"]
+  5. fit_card is None?        → call create_fit_card → done = True
 ```
 
 **Retry ladder (step 1):** when `search_listings` returns `[]`, the agent re-tries in order — drop size filter → relax price by +20% → keyword-only with no filters — stopping at the first non-empty result and recording the adjustment in `session["adjustment_note"]`. Only if every fallback is still empty does it set `session["error"]` and exit.
@@ -165,7 +167,7 @@ All state lives in a single `session` dict created by `_new_session()` at the st
 | `price_evaluation` | `check_price_fairness` | `create_fit_card`, display |
 | `outfit_suggestion` | `suggest_outfit` | `create_fit_card` |
 | `fit_card` | `create_fit_card` | final output |
-| `wardrobe` | startup | `suggest_outfit` |
+| `wardrobe` | startup; updated by `add_to_wardrobe` when `save_to_wardrobe=True` | `suggest_outfit` |
 | `error` | any step on failure | planning loop / display |
 
 The key handoff object is `selected_item`: because `search_listings` returns full listing dicts, the same dict flows unchanged into every downstream tool without any reshaping.

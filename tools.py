@@ -12,6 +12,7 @@ Tools:
     create_fit_card(outfit, new_item)               → str
 """
 
+import json
 import os
 import re
 
@@ -324,7 +325,18 @@ def create_fit_card(outfit: str, new_item: dict, price_evaluation: dict | None =
 
 # ── Tool 4: add_to_wardrobe ───────────────────────────────────────────────────
 
-def add_to_wardrobe(item: dict, wardrobe: dict) -> tuple[dict, str]:
+_WARDROBE_SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "data", "wardrobe_schema.json")
+
+def _persist_custom_wardrobe(wardrobe: dict) -> None:
+    """Write wardrobe items back to the custom_wardrobe field in wardrobe_schema.json."""
+    with open(_WARDROBE_SCHEMA_PATH, "r", encoding="utf-8") as f:
+        schema = json.load(f)
+    schema["custom_wardrobe"]["items"] = wardrobe.get("items", [])
+    with open(_WARDROBE_SCHEMA_PATH, "w", encoding="utf-8") as f:
+        json.dump(schema, f, indent=2, ensure_ascii=False)
+
+
+def add_to_wardrobe(item: dict, wardrobe: dict, persist: bool = False) -> tuple[dict, str]:
     """
     Add an item to the user's wardrobe, mapping it into the wardrobe item shape.
 
@@ -400,11 +412,13 @@ def add_to_wardrobe(item: dict, wardrobe: dict) -> tuple[dict, str]:
         "category": category,
         "colors": list(item.get("colors") or []),
         "style_tags": list(item.get("style_tags") or []),
+        "notes": item.get("notes", None),
     }
-    if item.get("notes"):
-        wardrobe_item["notes"] = item["notes"]
 
     updated = {**wardrobe, "items": items + [wardrobe_item]}
+    if persist:
+        _persist_custom_wardrobe(updated)
+    print(f"DEBUG: added item to wardrobe")
     return updated, f"Added '{name}' to your wardrobe."
 
 

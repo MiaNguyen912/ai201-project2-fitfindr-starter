@@ -72,6 +72,18 @@ def get_empty_wardrobe() -> dict:
     return schema["empty_wardrobe"]
 
 
+def get_custom_wardrobe() -> dict:
+    """
+    Convenience function — returns the custom wardrobe template (starts empty).
+    Items found during the session are added to this wardrobe via add_to_wardrobe.
+
+    Returns:
+        A wardrobe dict with an empty 'items' list, ready to be built up.
+    """
+    schema = load_wardrobe_schema()
+    return {"items": list(schema["custom_wardrobe"].get("items", []))}
+
+
 # --- Quick sanity check ---
 if __name__ == "__main__":
     listings = load_listings()
