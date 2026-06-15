@@ -122,6 +122,7 @@ wardrobe = get_example_wardrobe()
 
 ### Tool 5 — `check_price_fairness`
 **Purpose:** compares an item's price against comparable listings to produce a fairness verdict.
+Given an item, it's gonna pull similar items (same `category`, overlapping `style_tags`, and similar `condition`), computes their median price, and judges whether the item is a "fair"/"good deal"/"overprices"/or "insufficient data"
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
