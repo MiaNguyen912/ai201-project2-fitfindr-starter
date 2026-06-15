@@ -1,5 +1,6 @@
 
 # FitFindr — Starter Kit
+(see demo at https://drive.google.com/file/d/1o_3wNIQ0FWiXNEG4GVn0xLsoAzovTTFt/view?usp=drive_link)
 
 A multi-tool AI agent that searches secondhand clothing listings, evaluates price fairness, suggests outfits, and generates a shareable fit card — all in a single pass from a natural-language query.
 
