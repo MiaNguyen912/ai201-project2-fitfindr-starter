@@ -281,20 +281,8 @@ def create_fit_card(outfit: str, new_item: dict, price_evaluation: dict | None =
     title = new_item.get("title", "this thrifted find")
     price = new_item.get("price")
     platform = new_item.get("platform", "a thrift platform")
-
     price_str = f"${price:.0f}" if price is not None else "a steal"
-
-    price_note = ""
-    if isinstance(price_evaluation, dict):
-        verdict = price_evaluation.get("verdict", "")
-        if verdict == "good deal":
-            price_note = "Price context: This item is a good deal vs. similar listings — naturally mention it was a find/steal if it fits the vibe.\n"
-        elif verdict == "overpriced":
-            price_note = "Price context: This item is overpriced vs. similar listings — you can acknowledge the splurge if it fits the vibe.\n"
-        elif verdict == "fair":
-            price_note = "Price context: This item is fairly priced vs. similar listings — no need to comment on the price in the caption.\n"
-        elif verdict == "insufficient data":
-            price_note = "Price context: Not enough data to judge price fairness — skip mentioning the price in the caption.\n"
+    price_note = price_evaluation.get("verdict", "") if price_evaluation else "none"
 
     prompt = (
         f"Write a 2–4 sentence Instagram/TikTok OOTD caption for a thrifted item.\n\n"
@@ -306,7 +294,7 @@ def create_fit_card(outfit: str, new_item: dict, price_evaluation: dict | None =
         "Rules:\n"
         "- Sound casual and authentic, like a real person posting their outfit, NOT a product description\n"
         "- Mention the item name, price, and platform each exactly once, woven in naturally\n"
-        "- if the price note is 'good deal', explicitly mention it's 'a steal', if it's 'overpriced', explicitly say 'it's a bit pricy but worth it'. If it's 'fair' or 'insufficient data', skip mentioning the price.\n"
+        "- if the price note is 'good deal', explicitly mention keyword 'a steal' in the caption; if it's 'overpriced', explicitly mention the phrase 'It's a bit pricy but is worth it'; if it's 'fair' or 'insufficient data', you can skip mentioning the price note.\n"
         "- Capture the specific vibe of the outfit (don't be generic)\n"
         "- 2–4 sentences only; no hashtags, may add icons/emojis if it fits the vibe\n"
     )

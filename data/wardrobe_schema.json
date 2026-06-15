@@ -170,22 +170,7 @@
   "custom_wardrobe": {
     "_note": "Use this as the starting template for a user with custom wardrobe. User can add items to this wardrobe after they select an item from the marketplace. This allows the agent to build up a wardrobe over time and give better outfit suggestions based on what they already own.",
     "items": [
-      {
-        "id": "lst_006",
-        "name": "Graphic Tee — 2003 Tour Bootleg Style",
-        "category": "tops",
-        "colors": [
-          "black"
-        ],
-        "style_tags": [
-          "graphic tee",
-          "vintage",
-          "grunge",
-          "streetwear",
-          "band tee"
-        ],
-        "notes": null
-      }
+     
     ]
   }
 }
